@@ -1,6 +1,6 @@
 # SearXNG (local) + DeepSeek Harness search plugin
 
-A local-first web search stack: a SearXNG metasearch instance runs on this
+A local-first web search stack: a SearXNG metasearch instance runs on your
 machine as a systemd user service, and a small DeepSeek Harness (dsh) plugin
 registers it as the `web_search` provider for every agent in the `web`
 profile. No API keys, no third-party search accounts — queries go through
@@ -17,17 +17,44 @@ agent (web_search tool)
 
 `web_fetch` is untouched: it keeps the built-in local HTTP fetch provider.
 
-## Components
+## Repo layout
 
-### 1. SearXNG instance — `/home/devanandpa/sourced/searxng`
+| path                                  | what it is                              |
+| ------------------------------------- | --------------------------------------- |
+| `dsh-plugin-searxng/`                 | the dsh plugin (dependency-free ESM)    |
+| `deploy/settings-local.example.yml`   | SearXNG settings template               |
+| `deploy/searxng.service`              | systemd `--user` unit template          |
 
-- Shallow clone of https://github.com/searxng/searxng, Python 3.13 venv
-  created and populated with uv (`requirements.txt` + `requirements-server.txt`,
-  served by granian).
-- Settings: `settings-local.yml` next to the clone (`use_default_settings: true`,
-  JSON format enabled, `127.0.0.1:8888`, limiter off, generated secret key).
-- Service: `~/.config/systemd/user/searxng.service` (enabled; user lingering is
-  on, so it starts at boot without root).
+## 1. Set up the SearXNG instance
+
+The examples below use `~/sourced/searxng` as the checkout location — adjust
+the paths in `deploy/searxng.service` if you clone elsewhere.
+
+1. Shallow-clone upstream SearXNG and create a Python 3.13 venv with uv:
+
+   ```sh
+   git clone --depth 1 https://github.com/searxng/searxng ~/sourced/searxng
+   cd ~/sourced/searxng
+   uv venv --python 3.13 .venv
+   uv pip install --python .venv/bin/python \
+       -r requirements.txt -r requirements-server.txt
+   ```
+
+2. Copy the settings template next to the checkout and generate a secret key:
+
+   ```sh
+   cp <this-repo>/deploy/settings-local.example.yml ~/sourced/searxng/settings-local.yml
+   python3 -c "import secrets; print(secrets.token_hex(32))"  # paste into secret_key
+   ```
+
+3. Install and start the user service from the unit template:
+
+   ```sh
+   cp <this-repo>/deploy/searxng.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now searxng
+   loginctl enable-linger   # start at boot without root
+   ```
 
 Manage it with:
 
@@ -47,7 +74,7 @@ Update later with `git -C ~/sourced/searxng pull` and
 `uv pip install --python ~/sourced/searxng/.venv/bin/python -r requirements.txt -r requirements-server.txt`,
 then restart the service.
 
-### 2. The plugin — `dsh-plugin-searxng/` (this directory)
+## 2. The plugin — `dsh-plugin-searxng/`
 
 Dependency-free ESM (`dsh/index.js`, node builtins only; no build step). It
 registers one search provider on the `web` seam:
@@ -82,25 +109,32 @@ Test it standalone (against the live instance):
 cd dsh-plugin-searxng && node test/provider-smoke.mjs
 ```
 
-### 3. Wiring into the `web` profile
+## 3. Wire it into the `web` profile
 
-Already done:
+1. Install the plugin into the profile:
 
-1. `dsh plugin --profile web add <this dir>` installed the package
-   (`link:` dependency — `~/.dsh/profiles/web/node_modules/dsh-plugin-searxng`
-   is a symlink to this directory, so source edits apply on the next reload,
-   no reinstall) and appended `dsh-plugin-searxng` to
-   `dsh.profile.bundles` in `~/.dsh/profiles/web/package.json`.
+   ```sh
+   dsh plugin --profile web add <this-repo>/dsh-plugin-searxng
+   ```
+
+   This installs the package as a `link:` dependency —
+   `~/.dsh/profiles/web/node_modules/dsh-plugin-searxng` becomes a symlink to
+   the plugin directory, so source edits apply on the next reload, no
+   reinstall — and appends `dsh-plugin-searxng` to `dsh.profile.bundles` in
+   `~/.dsh/profiles/web/package.json`.
+
 2. The package's `cordis.patch.yml` (bundle layer) mounts the plugin and pins
    `searchProvider: searxng`.
-3. `~/.dsh/profiles/web/cordis.patch.yml` (user layer, applied after every
-   bundle) pins `searchProvider: searxng` again, so the routing wins
-   regardless of bundle order. A patch row replaces the targeted row's whole
-   config — **to fall back to modsearch, delete that `- id: web` row** (the
-   running app hot-reloads the file).
 
-The running app recomposed live when the files changed (dsh-hmr watches the
-profile's `package.json` and `cordis.patch.yml`); no restart was needed. After
+3. For routing that wins regardless of bundle order, also pin
+   `searchProvider: searxng` in the user layer
+   `~/.dsh/profiles/web/cordis.patch.yml` (applied after every bundle). A
+   patch row replaces the targeted row's whole config — **to fall back to
+   modsearch, delete that `- id: web` row** (the running app hot-reloads the
+   file).
+
+The running app recomposes live when those files change (dsh-hmr watches the
+profile's `package.json` and `cordis.patch.yml`); no restart is needed. After
 a fresh install elsewhere, a restart of DSH applies the same result.
 
 Inspect the effective composition at any time:
@@ -110,11 +144,12 @@ dsh --dump-config --profile web | grep -A3 '^# == dsh-plugin-searxng'
 dsh --dump-config --profile web | grep -A3 '^- id: web$'
 ```
 
-## Provenance of this setup
+## Acknowledgements
 
-- SearXNG: upstream master (shallow clone), served with the documented
-  granian invocation from SearXNG's own `manage` script.
+- [SearXNG](https://github.com/searxng/searxng) — the metasearch engine,
+  served with the granian invocation from its own `manage` script.
 - Plugin API surface (`ctx.web.registerSearchProvider`, `dsh.bundle.patch`
-  manifest, patch-row semantics): the installed `@deepseek-ai/dsh` 0.2.1-rc.2
-  packages; `@liustack/modsearch`'s `dsh/index.js` served as the working
-  reference for the out-of-tree plugin pattern.
+  manifest, patch-row semantics): the `@deepseek-ai/dsh` packages;
+  [`@liustack/modsearch`](https://www.npmjs.com/package/@liustack/modsearch)'s
+  `dsh/index.js` served as the working reference for the out-of-tree plugin
+  pattern.

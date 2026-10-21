@@ -1,0 +1,38 @@
+# systemd --user unit for a local SearXNG instance.
+#
+# 1. Adjust every path below if your checkout is not at $HOME/sourced/searxng.
+#    (%h expands to the home directory of the user running the unit.)
+# 2. Install it:
+#
+#      mkdir -p ~/.config/systemd/user
+#      cp searxng.service ~/.config/systemd/user/
+#      systemctl --user daemon-reload
+#      systemctl --user enable --now searxng
+#
+# 3. So it starts at boot without root, enable lingering for your user:
+#
+#      loginctl enable-linger
+#
+[Unit]
+Description=SearXNG metasearch engine (local instance for DeepSeek Harness agents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/sourced/searxng
+Environment=SEARXNG_SETTINGS_PATH=%h/sourced/searxng/settings-local.yml
+Environment=PYTHONPATH=%h/sourced/searxng
+Environment=PYTHONUNBUFFERED=1
+Environment=GRANIAN_INTERFACE=wsgi
+Environment=GRANIAN_HOST=127.0.0.1
+Environment=GRANIAN_PORT=8888
+Environment=GRANIAN_WEBSOCKETS=false
+Environment=GRANIAN_BLOCKING_THREADS=4
+Environment=GRANIAN_PROCESS_NAME=searxng
+ExecStart=%h/sourced/searxng/.venv/bin/granian searx.webapp:app
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

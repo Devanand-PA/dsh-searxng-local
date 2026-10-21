@@ -1,0 +1,26 @@
+# Local SearXNG instance for DeepSeek Harness agents.
+#
+# Copy this file next to your SearXNG checkout as `settings-local.yml`,
+# then generate a secret key:
+#
+#   python3 -c "import secrets; print(secrets.token_hex(32))"
+#
+# `use_default_settings` merges everything else from searx/settings.yml.
+use_default_settings: true
+
+general:
+  instance_name: "dsh-local-searxng"
+
+search:
+  # json format is what the DSH plugin consumes
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "REPLACE_WITH_GENERATED_SECRET"
+  bind_address: "127.0.0.1"
+  port: 8888
+  limiter: false        # local-only instance; no bot protection needed
+  image_proxy: false
+  public_instance: false
