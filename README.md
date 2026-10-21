@@ -8,8 +8,8 @@ your own SearXNG, which fans out to Google, Brave, DuckDuckGo, and friends.
 
 ```
 agent (web_search tool)
-  └─ ctx.web seam ── searchProvider: searxng      ← pinned in cordis.patch.yml
-       └─ dsh-plugin-searxng (this repo, symlinked into the profile)
+  └─ ctx.web seam ── searchProvider: searxng      ← pinned by the bundle patch
+       └─ dsh-plugin-searxng (this repo = the plugin package)
             └─ http://127.0.0.1:8888/search?format=json
                  └─ SearXNG (systemd --user service, survives reboot via linger)
                       └─ google cse / brave / duckduckgo / wikipedia / ...
@@ -17,12 +17,66 @@ agent (web_search tool)
 
 `web_fetch` is untouched: it keeps the built-in local HTTP fetch provider.
 
+## Install the plugin
+
+This repository **is** the plugin package (`dsh-plugin-searxng`): the repo
+root carries `package.json` with the `dsh.bundle.patch` manifest, and the
+plugin is plain ESM — no build step, so a git install works as-is.
+
+### Option A — Plugins GUI (recommended)
+
+DSH Web GUI → **Plugins** → **Install from source**, and enter:
+
+```
+github:Devanand-PA/dsh-searxng-local
+```
+
+(or `https://github.com/Devanand-PA/dsh-searxng-local.git`). Installation
+adds the bundle and enables it by default; the plugin's patch row pins
+`searchProvider: searxng` for the profile.
+
+### Option B — CLI
+
+```sh
+dsh plugin --profile web add github:Devanand-PA/dsh-searxng-local
+```
+
+### Option C — profile `package.json`
+
+```jsonc
+{
+  // …
+  "dependencies": {
+    "dsh-plugin-searxng": "github:Devanand-PA/dsh-searxng-local"
+    // …or a local checkout, edit-in-place friendly:
+    // "dsh-plugin-searxng": "link:/path/to/dsh-searxng-local"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        // …existing bundles…,
+        "dsh-plugin-searxng"
+      ]
+    }
+  }
+}
+```
+
+Then `pnpm install` in the profile directory (or re-run `dsh plugin add`),
+and restart DSH.
+
+The plugin declares `dsh.compatibility` metadata (`dsh >= 0.2.1-rc.2`,
+profiles `web` and `headless`) and requires no dsh peer dependencies, so the
+plugin manager's version gate never blocks it.
+
 ## Repo layout
 
 | path                                  | what it is                              |
 | ------------------------------------- | --------------------------------------- |
-| `dsh-plugin-searxng/`                 | the dsh plugin (dependency-free ESM)    |
-| `dsh-plugin-searxng/skills/searxng/SKILL.md` | the `searxng` skill body          |
+| `package.json`, `cordis.patch.yml`    | the plugin package (bundle manifest)    |
+| `dsh/index.js`                        | the plugin (dependency-free ESM)        |
+| `skills/searxng/SKILL.md`             | the `searxng` skill body                |
+| `test/provider-smoke.mjs`             | standalone smoke test                   |
 | `deploy/settings-local.example.yml`   | SearXNG settings template               |
 | `deploy/searxng.service`              | systemd `--user` unit template          |
 
@@ -75,7 +129,7 @@ Update later with `git -C ~/sourced/searxng pull` and
 `uv pip install --python ~/sourced/searxng/.venv/bin/python -r requirements.txt -r requirements-server.txt`,
 then restart the service.
 
-## 2. The plugin — `dsh-plugin-searxng/`
+## 2. The plugin — `dsh-plugin-searxng`
 
 Dependency-free ESM (`dsh/index.js`, node builtins only; no build step). It
 registers one search provider on the `web` seam:
@@ -107,13 +161,13 @@ Config (all optional, set on the plugin's row in a patch file):
 Test it standalone (against the live instance):
 
 ```sh
-cd dsh-plugin-searxng && node test/provider-smoke.mjs
+node test/provider-smoke.mjs
 ```
 
 ### What agents automatically know
 
 The plugin also registers two awareness artifacts, so a fresh session knows
-the integration exists without probing (opt out per session via the
+the integration exists without probing (opt out per deployment via the
 `promptSection` / `skill` config flags):
 
 - **A system-prompt section** (next to the built-in web-tool guidance) stating
@@ -124,39 +178,43 @@ the integration exists without probing (opt out per session via the
   way dsh's built-in skills are), carrying the direct-API recipes, service
   management, and troubleshooting tables.
 
-## 3. Wire it into the `web` profile
+## 3. Routing
 
-1. Install the plugin into the profile:
+The package's `cordis.patch.yml` (bundle layer) mounts the plugin and pins
+`searchProvider: searxng`. Bundle patches apply in profile-bundle order, so a
+profile whose own `cordis.patch.yml` pins another provider in this deployment
+should also pin searxng there (a patch row replaces the targeted row's whole
+config):
 
-   ```sh
-   dsh plugin --profile web add <this-repo>/dsh-plugin-searxng
-   ```
+```yaml
+- id: web
+  config:
+    searchProvider: searxng
+```
 
-   This installs the package as a `link:` dependency —
-   `~/.dsh/profiles/web/node_modules/dsh-plugin-searxng` becomes a symlink to
-   the plugin directory, so source edits apply on the next reload, no
-   reinstall — and appends `dsh-plugin-searxng` to `dsh.profile.bundles` in
-   `~/.dsh/profiles/web/package.json`.
-
-2. The package's `cordis.patch.yml` (bundle layer) mounts the plugin and pins
-   `searchProvider: searxng`.
-
-3. For routing that wins regardless of bundle order, also pin
-   `searchProvider: searxng` in the user layer
-   `~/.dsh/profiles/web/cordis.patch.yml` (applied after every bundle). A
-   patch row replaces the targeted row's whole config — **to fall back to
-   modsearch, delete that `- id: web` row** (the running app hot-reloads the
-   file).
-
-The running app recomposes live when those files change (dsh-hmr watches the
-profile's `package.json` and `cordis.patch.yml`); no restart is needed. After
-a fresh install elsewhere, a restart of DSH applies the same result.
+To fall back to another provider, delete that row (the running app hot-reloads
+the file).
 
 Inspect the effective composition at any time:
 
 ```sh
 dsh --dump-config --profile web | grep -A3 '^# == dsh-plugin-searxng'
 dsh --dump-config --profile web | grep -A3 '^- id: web$'
+```
+
+## Development (local checkout)
+
+```sh
+dsh plugin --profile web add /path/to/dsh-searxng-local   # link: dependency
+node test/provider-smoke.mjs                              # provider + awareness tests
+```
+
+A `link:` install points the profile's `node_modules/dsh-plugin-searxng` at
+this directory, so source edits apply on the next reload with no reinstall.
+A full-fidelity composition check that needs no live app:
+
+```sh
+DSH_HOME=/tmp/dsh-verify dsh --dump-config --profile web | grep -A3 'dsh-plugin-searxng'
 ```
 
 ## Acknowledgements
@@ -168,3 +226,5 @@ dsh --dump-config --profile web | grep -A3 '^- id: web$'
   [`@liustack/modsearch`](https://www.npmjs.com/package/@liustack/modsearch)'s
   `dsh/index.js` served as the working reference for the out-of-tree plugin
   pattern.
+- GitHub-installable bundle layout (`dsh.bundle` manifest, shipped plain JS,
+  no prepare step): [dsh-opencode-zen-plugin](https://github.com/Devanand-PA/dsh-opencode-zen-plugin).
