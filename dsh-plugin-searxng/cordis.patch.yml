@@ -1,0 +1,13 @@
+# dsh bundle layer: mount the searxng web-search plugin (dsh/index.js via the
+# package root export) and route the web seam's search capability to it.
+# Bundle patches apply in package.json `dsh.profile.bundles` order, so a
+# bundle installed after modsearch pins `searchProvider: searxng` over
+# modsearch's pin; the profile's cordis.patch.yml (applied after every bundle)
+# pins the same value again, so the routing holds regardless of bundle order.
+- id: web
+  config:
+    searchProvider: searxng
+
+- insert:
+    - id: searxng
+      name: dsh-plugin-searxng

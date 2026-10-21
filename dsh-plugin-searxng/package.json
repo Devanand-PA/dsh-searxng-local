@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugin-searxng",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: routes the web seam's search capability through a local SearXNG instance, so web_search runs on your own machine.",
+  "type": "module",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./dsh": "./dsh/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "searxng",
+    "web-search",
+    "local-first"
+  ],
+  "license": "MIT"
+}
