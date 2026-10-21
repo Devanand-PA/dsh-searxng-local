@@ -15,17 +15,28 @@
 //
 // Config (set on this plugin's row in a patch file, e.g. the profile's
 // cordis.patch.yml; every field optional):
-//   baseURL     - SearXNG base URL            (default "http://127.0.0.1:8888")
-//   timeoutMs   - per-search fetch budget     (default 10000)
-//   language    - SearXNG `language` param    (default: omit, server default)
-//   categories  - SearXNG `categories` param  (default: omit -> "general")
-//   engines     - SearXNG `engines` param     (default: omit; wins over categories)
-//   safesearch  - SearXNG `safesearch` param  (default: omit, server default)
+//   baseURL       - SearXNG base URL            (default "http://127.0.0.1:8888")
+//   timeoutMs     - per-search fetch budget     (default 10000)
+//   language      - SearXNG `language` param    (default: omit, server default)
+//   categories    - SearXNG `categories` param  (default: omit -> "general")
+//   engines       - SearXNG `engines` param     (default: omit; wins over categories)
+//   safesearch    - SearXNG `safesearch` param  (default: omit, server default)
+//   promptSection - false disables the system-prompt awareness section
+//   skill         - false disables the `searxng` skill registration
 
-const USER_AGENT = 'deepseek-harness-dsh-plugin-searxng/0.1.0';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+const USER_AGENT = 'deepseek-harness-dsh-plugin-searxng/0.2.0';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8888';
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+// The skill registry's standard precedence rank for packaged/bundled skills.
+// Hardcoded rather than imported: @deepseek-ai/dsh-skill is not resolvable
+// from an out-of-tree plugin (it is not a dependency of the profile), and a
+// number survives that fine.
+const BUNDLED_SKILL_RANK = 600;
 
 export const name = 'searxng';
 export const inject = ['web'];
@@ -36,7 +47,104 @@ export function apply(ctx, config = {}) {
     return;
   }
   ctx.web.registerSearchProvider(new SearxngSearchProvider(config));
+  // Awareness half: system-prompt section + skill. Optional services ride
+  // scoped ctx.inject calls (same pattern as modsearch) so a minimal profile
+  // without them keeps the search provider and skips these silently.
+  if (typeof ctx.inject !== 'function') return;
+  if (config.promptSection !== false) {
+    ctx.inject(['tools', 'systemPrompt'], (scope) => {
+      try {
+        registerPromptSection(scope);
+      } catch (error) {
+        console.error(`[searxng] prompt section skipped: ${error}`);
+      }
+    });
+  }
+  if (config.skill !== false) {
+    ctx.inject(['skills'], (scope) => {
+      try {
+        scope.skills.registerProvider(() => searxngSkillProvider);
+      } catch (error) {
+        console.error(`[searxng] skill registration skipped: ${error}`);
+      }
+    });
+  }
 }
+
+/**
+ * A short, always-present system-prompt section placed right after the web
+ * tool guidance (TOOL_WEB_FETCH = 2100). This is what makes a fresh session
+ * know the integration exists without probing: it names the instance, the
+ * service unit, and the direct-API escape hatch, and defers details to the
+ * `searxng` skill. Empty string in scopes where web_search is not visible —
+ * the same visibility pattern the built-in web tools use for their sections.
+ */
+function registerPromptSection(scope) {
+  const { tools, systemPrompt } = scope;
+  if (typeof systemPrompt?.section !== 'function') return;
+  systemPrompt.section({
+    name: 'plugin:searxng-web-search',
+    order: 2150,
+    text: ({ scope: resolutionScope }) =>
+      typeof tools?.get === 'function' && tools.get('web_search', resolutionScope) === undefined
+        ? ''
+        : PROMPT_SECTION_TEXT,
+  });
+}
+
+const PROMPT_SECTION_TEXT =
+  'web_search on this deployment is backed by a local SearXNG metasearch instance ' +
+  '(default http://127.0.0.1:8888, no API key) through the "searxng" provider. If a ' +
+  'search fails to connect, check that instance first with `systemctl --user status searxng` ' +
+  'before hunting for ports or configuration elsewhere. For filtered or advanced searches ' +
+  "web_search does not expose (categories, engines, date ranges, pagination), query the " +
+  "instance's JSON API directly, e.g. " +
+  "`curl -s 'http://127.0.0.1:8888/search?q=QUERY&format=json'`. The `searxng` skill has " +
+  'the full API, service management, and troubleshooting details.';
+
+/**
+ * The `searxng` skill: the deeper operational knowledge a session can load on
+ * demand. Registered the same way dsh's built-in badge skill registers its
+ * own — a provider with list()/get() on ctx.skills — so it appears in every
+ * session's skill catalog next to the other search providers' skills.
+ */
+const SKILL_BODY_URL = new URL('../skills/searxng/SKILL.md', import.meta.url);
+const SKILL_RESOURCE_BASE = {
+  kind: 'directory',
+  path: fileURLToPath(new URL('../skills/searxng/', import.meta.url)),
+};
+const SKILL_CANDIDATE = {
+  name: 'searxng',
+  description:
+    "Operate the local SearXNG metasearch instance that backs this deployment's web_search " +
+    '(no API key). Load when web_search fails or returns nothing, when the user mentions ' +
+    'SearXNG or asks how search is set up, or when a search needs filters web_search does ' +
+    'not expose: categories, engine selection, date ranges, pagination.',
+  invocation: {
+    modelInvocable: true,
+    userInvocable: true,
+  },
+  provider: 'searxng-plugin',
+  source: 'bundled',
+  resourceBase: SKILL_RESOURCE_BASE,
+  rank: BUNDLED_SKILL_RANK,
+  locator: SKILL_BODY_URL,
+};
+const searxngSkillProvider = {
+  name: 'searxng-plugin',
+  list: () => Promise.resolve([SKILL_CANDIDATE]),
+  async get() {
+    return {
+      name: SKILL_CANDIDATE.name,
+      description: SKILL_CANDIDATE.description,
+      invocation: SKILL_CANDIDATE.invocation,
+      provider: SKILL_CANDIDATE.provider,
+      source: SKILL_CANDIDATE.source,
+      resourceBase: SKILL_RESOURCE_BASE,
+      content: await readFile(SKILL_BODY_URL, 'utf8'),
+    };
+  },
+};
 
 /**
  * The SearXNG-backed search provider. `available()` must stay cheap and

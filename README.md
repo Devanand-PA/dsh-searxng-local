@@ -22,6 +22,7 @@ agent (web_search tool)
 | path                                  | what it is                              |
 | ------------------------------------- | --------------------------------------- |
 | `dsh-plugin-searxng/`                 | the dsh plugin (dependency-free ESM)    |
+| `dsh-plugin-searxng/skills/searxng/SKILL.md` | the `searxng` skill body          |
 | `deploy/settings-local.example.yml`   | SearXNG settings template               |
 | `deploy/searxng.service`              | systemd `--user` unit template          |
 
@@ -108,6 +109,20 @@ Test it standalone (against the live instance):
 ```sh
 cd dsh-plugin-searxng && node test/provider-smoke.mjs
 ```
+
+### What agents automatically know
+
+The plugin also registers two awareness artifacts, so a fresh session knows
+the integration exists without probing (opt out per session via the
+`promptSection` / `skill` config flags):
+
+- **A system-prompt section** (next to the built-in web-tool guidance) stating
+  that `web_search` is backed by the local SearXNG instance, that a failing
+  search should first be checked with `systemctl --user status searxng`, and
+  that the JSON API is available for filtered queries.
+- **A `searxng` skill** in every session's skill catalog (registered the same
+  way dsh's built-in skills are), carrying the direct-API recipes, service
+  management, and troubleshooting tables.
 
 ## 3. Wire it into the `web` profile
 
